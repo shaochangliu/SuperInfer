@@ -17,7 +17,7 @@ from transformers import (AutoModelForCausalLM, AutoTokenizer,
 from vllm.engine.arg_utils import AsyncEngineArgs, EngineArgs
 from vllm.entrypoints.openai.api_server import (
     build_async_engine_client_from_engine_args)
-from vllm.inputs import TextPrompt
+from vllm.inputs import PromptType, TextPrompt
 from vllm.lora.request import LoRARequest
 from vllm.lora.utils import get_adapter_absolute_path
 from vllm.multimodal import MultiModalDataDict
@@ -43,6 +43,7 @@ class SampleRequest:
     expected_output_len: int
     multi_modal_data: Optional[MultiModalDataDict] = None
     lora_request: Optional[LoRARequest] = None
+    prompt_token_ids: Optional[List[int]] = None
 
 
 def _get_prompt_for_image_model(question: str, *, model: str) -> str:
@@ -170,12 +171,15 @@ def run_vllm(
     llm = LLM(**dataclasses.asdict(engine_args))
 
     # Add the requests to the engine.
-    prompts: List[TextPrompt] = []
+    prompts: List[PromptType] = []
     sampling_params: List[SamplingParams] = []
     for request in requests:
-        prompts.append(
-            TextPrompt(prompt=request.prompt,
-                       multi_modal_data=request.multi_modal_data))
+        if request.prompt_token_ids is not None:
+            prompts.append({"prompt_token_ids": request.prompt_token_ids})
+        else:
+            prompts.append(
+                TextPrompt(prompt=request.prompt,
+                           multi_modal_data=request.multi_modal_data))
         sampling_params.append(
             SamplingParams(
                 n=n,
@@ -228,13 +232,16 @@ async def run_vllm_async(
             engine_args, disable_frontend_multiprocessing) as llm:
 
         # Add the requests to the engine.
-        prompts: List[TextPrompt] = []
+        prompts: List[PromptType] = []
         sampling_params: List[SamplingParams] = []
         lora_requests: List[Optional[LoRARequest]] = []
         for request in requests:
-            prompts.append(
-                TextPrompt(prompt=request.prompt,
-                           multi_modal_data=request.multi_modal_data))
+            if request.prompt_token_ids is not None:
+                prompts.append({"prompt_token_ids": request.prompt_token_ids})
+            else:
+                prompts.append(
+                    TextPrompt(prompt=request.prompt,
+                               multi_modal_data=request.multi_modal_data))
             sampling_params.append(
                 SamplingParams(
                     n=n,
@@ -356,34 +363,16 @@ def main(args: argparse.Namespace):
                 if lora_tokenizer:
                     request_tokenizer = lora_tokenizer
 
-            # Synthesize a prompt with the given input length.
             candidate_ids = [
-                random.randint(0, vocab_size - 1)
+                random.randint(0, request_tokenizer.vocab_size - 1)
                 for _ in range(args.input_len)
             ]
-            # As tokenizer may add additional tokens like BOS, we need to try
-            # different lengths to get the desired input length.
-            for _ in range(5):  # Max attempts to correct
-                candidate_prompt = request_tokenizer.decode(candidate_ids)
-                tokenized_len = len(request_tokenizer.encode(candidate_prompt))
-
-                if tokenized_len == args.input_len:
-                    break
-
-                # Adjust length based on difference
-                diff = args.input_len - tokenized_len
-                if diff > 0:
-                    candidate_ids.extend([
-                        random.randint(100, vocab_size - 100)
-                        for _ in range(diff)
-                    ])
-                else:
-                    candidate_ids = candidate_ids[:diff]
             requests.append(
-                SampleRequest(prompt=candidate_prompt,
+                SampleRequest(prompt="",
                               prompt_len=args.input_len,
                               expected_output_len=args.output_len,
-                              lora_request=lora_request))
+                              lora_request=lora_request,
+                              prompt_token_ids=candidate_ids))
     else:
         requests = sample_requests(tokenizer, args)
 
