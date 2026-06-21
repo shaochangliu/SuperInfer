@@ -175,9 +175,9 @@ class UniprocExecutorProcess(Executor):
                 kv_cache_gpu = (
                     executor.worker.model_runner.kv_caches_gpu_tensor)
                 cache_cfg = vllm_config.cache_config
-                # Constructed for its side-effects (allocates pinned host
-                # memory and starts the C++ swap thread).
-                Swapper(
+                # Keep the Swapper alive: the native thread stores raw
+                # pointers into its GPU/CPU tensors.
+                executor.swapper = Swapper(
                     vllm_config,
                     kv_cache_gpu,
                     num_cpu_blocks,

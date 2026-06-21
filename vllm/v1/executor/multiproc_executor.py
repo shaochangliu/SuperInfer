@@ -468,7 +468,9 @@ class MultiprocExecutorProcess(Executor):
                 kv_cache_gpu = (
                     executor.worker.model_runner.kv_caches_gpu_tensor)
                 cache_cfg = vllm_config.cache_config
-                Swapper(
+                # Keep the Swapper alive: the native thread stores raw
+                # pointers into its GPU/CPU tensors.
+                executor.swapper = Swapper(
                     vllm_config,
                     kv_cache_gpu,
                     num_cpu_blocks,

@@ -50,6 +50,7 @@ def _load() -> object:
         extra_include_paths=[str(_NATIVE_DIR)],
         extra_cflags=["-O3", "-std=c++20", "-DMSGPACK_NO_BOOST"],
         extra_ldflags=["-lzmq"],
+        with_cuda=True,
         verbose=False,
     )
     return _module

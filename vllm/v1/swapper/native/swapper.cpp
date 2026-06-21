@@ -267,15 +267,17 @@ void swapper_thread(const std::string &data_path, const std::string &notify_path
                     cudaStream_t *stream_in_ptr = nullptr, cudaStream_t *stream_out_ptr = nullptr,
                     const bool block_first = true
 ) {
+    cudaStream_t owned_stream_in = nullptr;
+    cudaStream_t owned_stream_out = nullptr;
     if (stream_in_ptr == nullptr) {
-        cudaStream_t stream_in;
-        CHECK_CUDA(cudaStreamCreateWithFlags(&stream_in, cudaStreamNonBlocking));
-        stream_in_ptr = &stream_in;
+        CHECK_CUDA(cudaStreamCreateWithFlags(&owned_stream_in,
+                                             cudaStreamNonBlocking));
+        stream_in_ptr = &owned_stream_in;
     }
     if (stream_out_ptr == nullptr) {
-        cudaStream_t stream_out;
-        CHECK_CUDA(cudaStreamCreateWithFlags(&stream_out, cudaStreamNonBlocking));
-        stream_out_ptr = &stream_out;
+        CHECK_CUDA(cudaStreamCreateWithFlags(&owned_stream_out,
+                                             cudaStreamNonBlocking));
+        stream_out_ptr = &owned_stream_out;
     }
 
     zmq::context_t context(1);
