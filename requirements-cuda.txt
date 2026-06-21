@@ -9,6 +9,9 @@
 #   pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r requirements-cuda.txt
 torch == 2.5.1
 torchvision == 0.20.1 # required for phi3v processor; updated alongside torch
+# Required by torch.compile/inductor. PyPI does not publish triton 3.1.0
+# aarch64 wheels, so GH200/arm64 users need a source build or --enforce-eager.
+triton == 3.1.0; platform_machine == "x86_64"
 
 # CUDA 12.4 toolkit components. The aarch64 torch wheel does NOT declare
 # these as deps (it bundles its own runtime libs), so the resolver
