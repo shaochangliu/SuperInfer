@@ -32,6 +32,8 @@ class ModelRunnerOutput:
 
     # [num_reqs]
     sampled_token_ids: List[int]
+    # req_id -> token_id for tokens appended by the worker.
+    new_token_ids: Dict[str, int]
 
     # [num_reqs, max_num_logprobs + 1]
     logprob_token_ids_cpu: Optional[torch.Tensor]

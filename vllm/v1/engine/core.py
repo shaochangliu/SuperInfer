@@ -157,6 +157,28 @@ class EngineCore:
         # if has_unfinished_executions:
         #     self.queue_in_execute_model.put_nowait(("execute_model", (self.scheduler_output_prev, )))
 
+        engine_core_outputs = []
+        update_before_schedule = (
+            has_unfinished_executions
+            and self.scheduler.has_pending_lookahead_outputs())
+        if update_before_schedule:
+            timer_wait_model_exec = TimeMeasurement("wait_model_exec", self.observability_config.collect_model_execute_time)
+            with timer_wait_model_exec:
+                output = self.queue_out_execute_model.get()
+            model_execute_time = output.model_execute_time
+            wait_model_execute_time = timer_wait_model_exec.elapsed_time
+
+            timer_update = TimeMeasurement("update", self.observability_config.collect_update_time)
+            with timer_update:
+                engine_core_outputs, _ = self.scheduler.update_from_output(
+                    self.scheduler_output_prev, output, self.prev_lookahead)
+            update_time = timer_update.elapsed_time
+
+            self.scheduler_output_prev = None
+            self.prev_lookahead = False
+            has_unfinished_executions = False
+            has_unfinished_requests = self.scheduler.has_unfinished_requests()
+
         # run schedule and swapping in main process
         if has_unfinished_requests:
             timer_schedule = TimeMeasurement("schedule", self.observability_config.collect_schedule_time)
@@ -173,10 +195,11 @@ class EngineCore:
             timer_swap = TimeMeasurement("swap", self.observability_config.collect_swap_time)
             with timer_swap:
                 self.model_executor.swap(scheduler_output.blocks_to_swap_in, scheduler_output.blocks_to_swap_out)
-            swap_time = timer_swap.elapsed_time
+            swap_time = timer_swap.elapsed_time or 0
             gbs = (len(scheduler_output.blocks_to_swap_in) +
                    len(scheduler_output.blocks_to_swap_out)) * 2 / 1024
-            bandwidth = gbs / swap_time
+            if swap_time > 0:
+                bandwidth = gbs / swap_time
             blocks_swap_in = len(scheduler_output.blocks_to_swap_in)
             blocks_swap_out = len(scheduler_output.blocks_to_swap_out)
             scheduler_output.blocks_to_swap_in = None
@@ -209,7 +232,7 @@ class EngineCore:
 
         else:
             self.scheduler_output_prev = scheduler_output
-            engine_core_outputs = []
+            self.prev_lookahead = False
 
         # prevent data race by deepcopy request states
         if self.scheduler_output_prev is not None:

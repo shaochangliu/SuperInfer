@@ -102,6 +102,25 @@ class Scheduler:
         self.proactive_swapping = self.swapping_budget > 0
         self.time_record = []
 
+    def _can_extend_after_full_step(self, request: Request,
+                                    lookahead: bool) -> bool:
+        if lookahead:
+            num_tokens = request.num_tokens_next
+            num_output_tokens = num_tokens - request.num_prompt_tokens
+        else:
+            num_tokens = request.num_tokens
+            num_output_tokens = request.num_output_tokens
+
+        return (num_tokens < self.max_model_len
+                and num_output_tokens + 1 < request.max_tokens)
+
+    def has_pending_lookahead_outputs(self) -> bool:
+        return any(
+            req.num_computed_tokens_next >= req.num_tokens_next
+            or req.num_tokens_next - req.num_tokens > 1
+            or req.num_computed_tokens_next - req.num_computed_tokens > 1
+            for req in self.running)
+
     def schedule_single_running_request(
         self,
         request: Request,
@@ -136,17 +155,20 @@ class Scheduler:
                 # The request cannot be scheduled.
                 # Preempt the lowest-priority request.
                 preempted_req = self.running.pop()
-                if self.scheduler_config.eviction_policy == "recomputing":
+                preemption_mode = (
+                    self.scheduler_config.preemption_mode or "recompute")
+                if preemption_mode == "recompute":
                     self.kv_cache_manager.free(preempted_req)
                     preempted_req.status = RequestStatus.PREEMPTED
                     preempted_req.num_computed_tokens = 0
                     preempted_req.num_computed_tokens_next = 0
                     preempted_req.num_tokens_next = preempted_req.num_tokens
-                elif self.scheduler_config.eviction_policy == "swapping":
+                elif preemption_mode == "swap":
                     self.kv_cache_manager.swap_out(preempted_req)
                     preempted_req.status = RequestStatus.SWAPPED
                 else:
-                    raise ValueError(f"Invalid eviction policy: {self.scheduler_config.eviction_policy}")
+                    raise ValueError(
+                        f"Invalid preemption mode: {preemption_mode}")
 
                 self.waiting.append(preempted_req)
                 self.time_record.append('WAITING | ' + str(round(time.time(), 2)) + ' | ' + preempted_req.request_id)
@@ -567,7 +589,8 @@ class Scheduler:
                 assert req.num_tokens_next > 0
                 assert req.num_computed_tokens_next + st <= req.num_tokens_next
                 is_partial_request = req.num_computed_tokens_next + st < req.num_tokens_next
-                if not is_partial_request:
+                if (not is_partial_request
+                        and self._can_extend_after_full_step(req, True)):
                     req.num_tokens_next += 1
                 req.num_computed_tokens_next += st
             else:
@@ -577,8 +600,10 @@ class Scheduler:
                 is_partial_request = req.num_computed_tokens + st < req.num_tokens
                 if is_partial_request:
                     req.num_tokens_next = req.num_tokens
-                else:
+                elif self._can_extend_after_full_step(req, False):
                     req.num_tokens_next = req.num_tokens + 1
+                else:
+                    req.num_tokens_next = req.num_tokens
                 req.num_computed_tokens_next = req.num_computed_tokens + st
 
         for req in chain(scheduled_new_reqs, scheduled_resumed_reqs):
@@ -587,8 +612,10 @@ class Scheduler:
             is_partial_request = req.num_computed_tokens + st < req.num_tokens
             if is_partial_request:
                 req.num_tokens_next = req.num_tokens
-            else:
+            elif self._can_extend_after_full_step(req, False):
                 req.num_tokens_next = req.num_tokens + 1
+            else:
+                req.num_tokens_next = req.num_tokens
             req.num_computed_tokens_next = req.num_computed_tokens + st
 
         scheduler_output = SchedulerOutput(
@@ -754,6 +781,7 @@ class Scheduler:
         lookahead: bool = False,
     ) -> Tuple[List[EngineCoreOutput], Set[str]]:
         sampled_token_ids = model_runner_output.sampled_token_ids
+        new_token_ids = model_runner_output.new_token_ids
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
         engine_core_outputs: List[EngineCoreOutput] = []
 
@@ -764,12 +792,30 @@ class Scheduler:
         bad_ids = model_runner_output.bad_ids
         for req_id in scheduler_output.num_scheduled_tokens.keys():
             request = self.requests[req_id]
-            if req_id in bad_ids:
-                # request.num_computed_tokens += num_scheduled_tokens[req_id]
-                continue
             request.num_computed_tokens += num_scheduled_tokens[req_id]
-            assert request.num_computed_tokens <= request.num_tokens
+
+            token_id = new_token_ids.get(req_id)
+            if token_id is not None:
+                request.append_output_token_ids(token_id)
+                num_new_tokens = 1
+                stopped = self._check_stop(request)
+                output = EngineCoreOutput(
+                    request_id=req_id,
+                    new_token_ids=request.output_token_ids[-num_new_tokens:],
+                    finished=request.is_finished(),
+                    finish_reason=request.get_finished_reason(),
+                    stop_reason=request.stop_reason)
+                engine_core_outputs.append(output)
+                if stopped:
+                    stopped_ids.add(req_id)
+                assert request.num_computed_tokens <= request.num_tokens
+                continue
+
+            if req_id in bad_ids:
+                assert request.num_computed_tokens <= request.num_tokens
+                continue
             # FIXME(julian): no encoder support
+            assert request.num_computed_tokens <= request.num_tokens
             if request.num_computed_tokens == request.num_tokens:
                 req_index = model_runner_output.req_id_to_index[req_id]
                 token_id = sampled_token_ids[req_index]

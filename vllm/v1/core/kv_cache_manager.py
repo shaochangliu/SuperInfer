@@ -196,9 +196,12 @@ class KVCacheManager:
         if self.fix_wrong_prefix_caching:
 
             num_cached_full_blocks = request.num_cached_tokens // self.block_size
-            num_computed_full_blocks = request.num_computed_tokens // self.block_size
+            num_hashable_tokens = min(request.num_computed_tokens,
+                                      len(request.all_token_ids))
+            num_hashable_full_blocks = num_hashable_tokens // self.block_size
 
-            new_full_blocks = req_blocks[num_cached_full_blocks:num_computed_full_blocks]
+            new_full_blocks = req_blocks[
+                num_cached_full_blocks:num_hashable_full_blocks]
 
             if new_full_blocks:
                 self._cache_full_blocks(
@@ -208,12 +211,13 @@ class KVCacheManager:
                     prev_block=req_blocks[num_cached_full_blocks - 1]
                     if num_cached_full_blocks >= 1 else None,
                 )
-                request.num_cached_tokens = num_computed_full_blocks * self.block_size
+                request.num_cached_tokens = (
+                    num_hashable_full_blocks * self.block_size)
 
             for block in new_full_blocks:
                 block.mark_full(clean=True)
                 self.pending_blocks_to_swap_out.append((block.block_id, block.mapped_cpu_block.block_id))
-            for block in req_blocks[num_computed_full_blocks:num_required_blocks]:
+            for block in req_blocks[num_hashable_full_blocks:num_required_blocks]:
                 block.mark_half(dirty=True)
 
         else:

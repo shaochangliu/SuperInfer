@@ -575,6 +575,7 @@ class GPUModelRunner:
         )
 
         sampled_token_ids = sampler_output.sampled_token_ids
+        new_token_ids = {}
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
         num_reqs = self.input_batch.num_reqs
@@ -594,6 +595,7 @@ class GPUModelRunner:
                 token_id = sampled_token_ids[i]
                 self.input_batch.token_ids_cpu[i, seq_len] = token_id
                 req_state.output_token_ids.append(token_id)
+                new_token_ids[req_id] = token_id
             else:
                 bad_ids.append(req_id)
                 # Ignore the sampled token from the partial request.
@@ -622,6 +624,7 @@ class GPUModelRunner:
             req_ids=req_ids,
             req_id_to_index=self.input_batch.req_id_to_index,
             sampled_token_ids=sampled_token_ids,
+            new_token_ids=new_token_ids,
             logprob_token_ids_cpu=logprob_token_ids,
             logprobs_cpu=logprobs,
             model_execute_time=None,
