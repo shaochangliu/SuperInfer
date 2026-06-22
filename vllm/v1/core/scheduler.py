@@ -116,7 +116,8 @@ class Scheduler:
 
     def has_pending_lookahead_outputs(self) -> bool:
         return any(
-            req.num_computed_tokens_next >= req.num_tokens_next
+            req.num_computed_tokens >= req.num_tokens
+            or req.num_computed_tokens_next >= req.num_tokens_next
             or req.num_tokens_next - req.num_tokens > 1
             or req.num_computed_tokens_next - req.num_computed_tokens > 1
             for req in self.running)
@@ -576,7 +577,8 @@ class Scheduler:
         running_reqs_data = [
             self._make_running_request_data(
                 req, req_to_new_block_ids[req.request_id],
-                req.num_computed_tokens_next if lookahead else req.num_computed_tokens)
+                req.num_computed_tokens_next if lookahead else req.num_computed_tokens,
+                req.num_tokens_next if lookahead else req.num_tokens)
             for req in scheduled_running_reqs
         ]
         preempted_req_ids = {req.request_id for req in preempted_reqs}
@@ -647,6 +649,7 @@ class Scheduler:
         request: Request,
         new_block_ids: List[int],
         num_computed_tokens: int,
+        num_tokens: int,
     ) -> "RunningRequestData":
         # OPTIMIZATION: Cache the RunningRequestData objects to avoid creating
         # them at each scheduling step.
@@ -654,9 +657,11 @@ class Scheduler:
             req_data = self.running_reqs_data[request.request_id]
             req_data.new_block_ids = new_block_ids
             req_data.num_computed_tokens = num_computed_tokens
+            req_data.num_tokens = num_tokens
         else:
             req_data = RunningRequestData.from_request(request, new_block_ids,
-                                                       num_computed_tokens)
+                                                       num_computed_tokens,
+                                                       num_tokens)
             self.running_reqs_data[request.request_id] = req_data
         # TODO(jiahuan): duplicate it to prevent data race
         return req_data
@@ -936,6 +941,7 @@ class NewRequestData:
     sampling_params: SamplingParams
     block_ids: List[int]
     num_computed_tokens: int
+    num_tokens: int
 
     @classmethod
     def from_request(
@@ -954,6 +960,7 @@ class NewRequestData:
             sampling_params=request.sampling_params,
             block_ids=block_ids,
             num_computed_tokens=num_computed_tokens,
+            num_tokens=request.num_tokens,
         )
 
 
@@ -963,6 +970,7 @@ class ResumedRequestData:
     req_id: str
     block_ids: List[int]
     num_computed_tokens: int
+    num_tokens: int
 
     @classmethod
     def from_request(
@@ -975,6 +983,7 @@ class ResumedRequestData:
             req_id=request.request_id,
             block_ids=block_ids,
             num_computed_tokens=num_computed_tokens,
+            num_tokens=request.num_tokens,
         )
 
 
@@ -984,6 +993,7 @@ class RunningRequestData:
     req_id: str
     new_block_ids: List[int]
     num_computed_tokens: int
+    num_tokens: int
 
     @classmethod
     def from_request(
@@ -991,11 +1001,13 @@ class RunningRequestData:
         request: Request,
         new_block_ids: List[int],
         num_computed_tokens: int,
+        num_tokens: int,
     ) -> "RunningRequestData":
         return cls(
             req_id=request.request_id,
             new_block_ids=new_block_ids,
             num_computed_tokens=num_computed_tokens,
+            num_tokens=num_tokens,
         )
 
 

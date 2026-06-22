@@ -1,4 +1,5 @@
 import gc
+import itertools
 import pickle
 import time
 from typing import TYPE_CHECKING, Dict, List, Tuple, cast
@@ -576,21 +577,30 @@ class GPUModelRunner:
 
         sampled_token_ids = sampler_output.sampled_token_ids
         new_token_ids = {}
+        scheduled_num_tokens = {
+            req.req_id: req.num_tokens
+            for req in itertools.chain(
+                scheduler_output.scheduled_new_reqs,
+                scheduler_output.scheduled_resumed_reqs,
+                scheduler_output.scheduled_running_reqs,
+            )
+        }
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
         num_reqs = self.input_batch.num_reqs
         for i, req_id in enumerate(self.input_batch.req_ids[:num_reqs]):
             assert req_id is not None
             req_state = self.requests[req_id]
+            num_tokens = scheduled_num_tokens[req_id]
             seq_len = (req_state.num_computed_tokens +
                        scheduler_output.num_scheduled_tokens[req_id])
-            if seq_len > req_state.num_tokens:
-                print(f"seq_len: {seq_len}, num_tokens: {req_state.num_tokens}, req_id: {req_id}")  # noqa: E501
+            if seq_len > num_tokens:
+                print(f"seq_len: {seq_len}, num_tokens: {num_tokens}, req_id: {req_id}")  # noqa: E501
                 print(f"output-3: {req_state.output_token_ids[-3:]} ")
                 print("WTF")
 
-            assert seq_len <= req_state.num_tokens
-            if seq_len == req_state.num_tokens:
+            assert seq_len <= num_tokens
+            if seq_len == num_tokens:
                 # Append the sampled token to the output token ids.
                 token_id = sampled_token_ids[i]
                 self.input_batch.token_ids_cpu[i, seq_len] = token_id

@@ -220,3 +220,6 @@ shellcheck*/
 # flashinfer is a runtime pip dependency (see requirements-cuda.txt);
 # do not commit if it ever lands in the working tree
 /flashinfer/
+
+/logs
+nohup.out
