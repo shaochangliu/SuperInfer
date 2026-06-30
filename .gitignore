@@ -221,5 +221,7 @@ shellcheck*/
 # do not commit if it ever lands in the working tree
 /flashinfer/
 
-/logs
+/logs*
 nohup.out
+cuda_memory_reserver*
+run_Super.sh

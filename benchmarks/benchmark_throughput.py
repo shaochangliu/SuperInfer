@@ -2,6 +2,7 @@
 import argparse
 import dataclasses
 import json
+import os
 import random
 import time
 from functools import cache
@@ -225,6 +226,7 @@ async def run_vllm_async(
     n: int,
     engine_args: AsyncEngineArgs,
     disable_frontend_multiprocessing: bool = False,
+    request_finish_log_jsonl: Optional[str] = None,
 ) -> float:
     from vllm import SamplingParams
 
@@ -253,18 +255,37 @@ async def run_vllm_async(
             lora_requests.append(request.lora_request)
 
         generators = []
-        start = time.perf_counter()
-        for i, (prompt, sp,
-                lr) in enumerate(zip(prompts, sampling_params, lora_requests)):
-            generator = llm.generate(prompt,
-                                     sp,
-                                     lora_request=lr,
-                                     request_id=f"test{i}")
-            generators.append(generator)
-        all_gens = merge_async_iterators(*generators)
-        async for i, res in all_gens:
-            pass
-        end = time.perf_counter()
+        log_file = (open(request_finish_log_jsonl, "w")
+                    if request_finish_log_jsonl else None)
+        finished_request_ids = set()
+        try:
+            for i, (prompt, sp, lr) in enumerate(
+                    zip(prompts, sampling_params, lora_requests)):
+                generator = llm.generate(prompt,
+                                         sp,
+                                         lora_request=lr,
+                                         request_id=f"test{i}")
+                generators.append(generator)
+            all_gens = merge_async_iterators(*generators)
+            start = time.perf_counter()
+            async for i, res in all_gens:
+                now = time.perf_counter()
+                if (not res.finished
+                        or res.request_id in finished_request_ids):
+                    continue
+                finished_request_ids.add(res.request_id)
+                if log_file is not None:
+                    elapsed = now - start
+                    log_file.write(
+                        json.dumps({
+                            "request_index": i,
+                            "elapsed_time": round(elapsed, 2),
+                        }) + "\n")
+                    log_file.flush()
+            end = time.perf_counter()
+        finally:
+            if log_file is not None:
+                log_file.close()
         return end - start
 
 
@@ -344,6 +365,13 @@ def run_mii(
     return end - start
 
 
+def get_finish_time_distribution_path(output_json: Optional[str]) -> str:
+    if output_json is None:
+        return "request_finish_distribution.jsonl"
+    root, _ = os.path.splitext(output_json)
+    return f"{root}.finish.jsonl"
+
+
 def main(args: argparse.Namespace):
     print(args)
     random.seed(args.seed)
@@ -378,6 +406,10 @@ def main(args: argparse.Namespace):
 
     is_multi_modal = any(request.multi_modal_data is not None
                          for request in requests)
+    request_finish_log_jsonl = None
+    if args.record_finish_time_distribution:
+        request_finish_log_jsonl = get_finish_time_distribution_path(
+            args.output_json)
     if args.backend == "vllm":
         if args.async_engine:
             elapsed_time = uvloop.run(
@@ -386,6 +418,7 @@ def main(args: argparse.Namespace):
                     args.n,
                     AsyncEngineArgs.from_cli_args(args),
                     args.disable_frontend_multiprocessing,
+                    request_finish_log_jsonl,
                 ))
         else:
             elapsed_time = run_vllm(requests, args.n,
@@ -421,6 +454,9 @@ def main(args: argparse.Namespace):
             "requests_per_second": len(requests) / elapsed_time,
             "tokens_per_second": total_num_tokens / elapsed_time,
         }
+        if request_finish_log_jsonl:
+            results["request_finish_distribution_jsonl"] = (
+                request_finish_log_jsonl)
         with open(args.output_json, "w") as f:
             json.dump(results, f, indent=4)
 
@@ -471,6 +507,13 @@ if __name__ == "__main__":
                         action='store_true',
                         default=False,
                         help="Disable decoupled async engine frontend.")
+    parser.add_argument(
+        "--record-finish-time-distribution",
+        action="store_true",
+        default=False,
+        help="Write per-request finish-time distribution as JSONL. Timings "
+        "are relative to the first request submission and exclude benchmark "
+        "preparation.")
     # LoRA
     parser.add_argument(
         "--lora-path",
@@ -490,6 +533,10 @@ if __name__ == "__main__":
         assert args.input_len is None
     if args.enable_lora:
         assert args.lora_path is not None
+    if (args.record_finish_time_distribution
+            and (args.backend != "vllm" or not args.async_engine)):
+        raise ValueError("--record-finish-time-distribution is currently "
+                         "supported only with --backend vllm --async-engine.")
 
     if args.backend == "vllm":
         if args.hf_max_batch_size is not None:
