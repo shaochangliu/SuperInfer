@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-REPO_DIR="/scratch/sliu27/SuperInfer"
+REPO_DIR="/home/sliu27/baseline/SuperInfer"
 
 LOG_DIR="$REPO_DIR/logs_largerPP"
 VENV_ACTIVATE="$REPO_DIR/.venv/bin/activate"

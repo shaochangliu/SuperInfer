@@ -283,9 +283,14 @@ class AsyncLLM(EngineClient):
                 # 4) Abort any requests that finished due to stop strings.
                 await self.engine_core.abort_requests_async(reqs_to_abort)
                     
-        except BaseException as e:
-            logger.error(e)
-            raise e
+        except asyncio.CancelledError:
+            # Expected when shutdown() cancels the background output task.
+            # Preserve the task's cancelled state without reporting a false
+            # engine error during normal teardown.
+            raise
+        except Exception:
+            logger.exception("AsyncLLM output handler failed.")
+            raise
 
     async def abort(self, request_id: str) -> None:
         """Abort RequestId in self, detokenizer, and engine core."""
