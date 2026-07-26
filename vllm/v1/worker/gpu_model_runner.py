@@ -16,6 +16,7 @@ from vllm.forward_context import set_forward_context
 from vllm.inputs import INPUT_REGISTRY
 from vllm.logger import init_logger
 from vllm.model_executor.model_loader import get_model
+from vllm.model_executor.models.utils import set_cpu_offload_max_bytes
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalKwargs
 from vllm.sampling_params import SamplingType
 from vllm.utils import (STR_DTYPE_TO_TORCH_DTYPE, DeviceMemoryProfiler,
@@ -50,6 +51,11 @@ class GPUModelRunner:
         self.speculative_config = vllm_config.speculative_config
         self.prompt_adapter_config = vllm_config.prompt_adapter_config
         self.observability_config = vllm_config.observability_config
+
+        # Keep V1 consistent with the legacy model runner: wire the official
+        # --cpu-offload-gb engine argument into the shared layer offloader.
+        set_cpu_offload_max_bytes(
+            int(self.cache_config.cpu_offload_gb * 1024**3))
 
         model_config = self.model_config
         cache_config = self.cache_config
